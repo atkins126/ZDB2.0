@@ -70,6 +70,11 @@ type
     procedure Clean;
   end;
 
+  IZDB2_Cipher = interface
+    procedure Encrypt(p: Pointer; Size: NativeInt);
+    procedure Decrypt(p: Pointer; Size: NativeInt);
+  end;
+
   TZDB2_BlockHndle = array of Integer;
   TZDB2_BlockBuffer = array of TZDB2_Block;
   TZDB2_BlockWriteCache = array of TZDB2_BlockCache;
@@ -94,8 +99,8 @@ type
 
     constructor Create;
     destructor Destroy; override;
-    function Read_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
-    function Write_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
+    function Read(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
+    function Write(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
     procedure BuildBlockBuffer(var BlockBuffer_: TZDB2_BlockBuffer);
     class function ComputeSize(BlockNum_: Integer): Int64;
   end;
@@ -110,8 +115,8 @@ type
     procedure ExtractToBlockBuffer(var Buffer: TZDB2_BlockBuffer); overload;
     function FillFromBlockBuffer(var Buffer: TZDB2_BlockBuffer; StartID_: Integer): Boolean; overload;
     function FillFromBlockBuffer(var Buffer: TZDB2_BlockBuffer): Boolean; overload;
-    function Read_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
-    function Write_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
+    function Read(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
+    function Write(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
     procedure Clean;
     procedure SavingMemory;
   end;
@@ -136,26 +141,22 @@ type
     CRC16Buffer: array of WORD;
     constructor Create;
     destructor Destroy; override;
-    function Build(Core_: TZDB2_Core_Space): Boolean;
+    function Build(Core_: TZDB2_Core_Space): Boolean; overload;
+    function Build(Core_: TZDB2_Core_Space; Hnd: TZDB2_BlockHndle): Boolean; overload;
     procedure LoadFromStream(stream: TCoreClassStream);
     procedure SaveToStream(stream: TCoreClassStream);
     procedure LoadFromFile(FileName_: SystemString);
     procedure SaveToFile(FileName_: SystemString);
   end;
 
-  IZDB2_Cipher = interface
-    procedure Encrypt(p: Pointer; Size: WORD);
-    procedure Decrypt(p: Pointer; Size: WORD);
-  end;
-
   TZDB2_Cipher = class(TCoreClassInterfacedObject, IZDB2_Cipher)
   private
     FCipher: TCipher_Base;
   public
-    constructor Create(CipherSecurity_: TCipherSecurity; passowrd_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
+    constructor Create(CipherSecurity_: TCipherSecurity; passoword_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
     destructor Destroy; override;
-    procedure Encrypt(sour: Pointer; Size: WORD);
-    procedure Decrypt(sour: Pointer; Size: WORD);
+    procedure Encrypt(sour: Pointer; Size: NativeInt);
+    procedure Decrypt(sour: Pointer; Size: NativeInt);
     class procedure Test;
   end;
 
@@ -210,7 +211,7 @@ type
     constructor Create(IOHnd_: PIOHnd);
     destructor Destroy; override;
 
-    procedure ErrorInfo(const Text_: SystemString);
+    class procedure ErrorInfo(const Text_: SystemString);
     procedure FlushCache;
     function WriteHeader(): Boolean;
     function WriteTable(): Boolean;
@@ -335,7 +336,7 @@ begin
   inherited;
 end;
 
-function TZDB2_BlockStoreData.Read_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
+function TZDB2_BlockStoreData.Read(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
 var
   head: TBlockStoreHeader__;
   Tail: TBlockStoreTail__;
@@ -343,58 +344,115 @@ begin
   Result := False;
   // head
   if not umlFileSeek(Hnd_, Position_) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read Seek error.');
       exit;
+    end;
   if not umlBlockRead(Hnd_, head, SizeOf(TBlockStoreHeader__)) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read Header error.');
       exit;
+    end;
+  if Assigned(Cipher_) then
+      Cipher_.Decrypt(@head, SizeOf(TBlockStoreHeader__));
   if head.Flag1 <> C_ZDB2_SpaceTableHead_1 then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read verify SpaceTableHead1 error.');
       exit;
+    end;
   if head.Flag2 <> C_ZDB2_SpaceTableHead_2 then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read verify SpaceTableHead2 error.');
       exit;
+    end;
   Count := head.Count;
   SetLength(Buffer, Count);
   // read space table
   if not umlBlockRead(Hnd_, Buffer[0], SizeOf(TZDB2_BlockStore) * Count) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read Buffer error.');
       exit;
+    end;
+  if Assigned(Cipher_) then
+      Cipher_.Decrypt(@Buffer[0], SizeOf(TZDB2_BlockStore) * Count);
   // verify md5
   MD5 := umlMD5(@Buffer[0], SizeOf(TZDB2_BlockStore) * Count);
   if not umlMD5Compare(MD5, head.MD5) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read verify Buffer md5 error.');
       exit;
+    end;
   // tail
   if not umlBlockRead(Hnd_, Tail, SizeOf(TBlockStoreTail__)) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read Tail error.');
       exit;
+    end;
+  if Assigned(Cipher_) then
+      Cipher_.Decrypt(@Tail, SizeOf(TBlockStoreTail__));
   if Tail.Flag1 <> C_ZDB2_SpaceTableTail_1 then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read verify Tail1 error.');
       exit;
+    end;
   if Tail.Flag2 <> C_ZDB2_SpaceTableTail_2 then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Read verify Tail2 error.');
       exit;
+    end;
   NextPosition := Tail.NextPosition;
   Position := Position_;
   Result := True;
 end;
 
-function TZDB2_BlockStoreData.Write_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
+function TZDB2_BlockStoreData.Write(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
 var
   head: TBlockStoreHeader__;
+  tmp: TMem64;
   Tail: TBlockStoreTail__;
 begin
   Result := False;
   // head
   head.Flag1 := C_ZDB2_SpaceTableHead_1;
   head.Count := Length(Buffer);
-  head.MD5 := umlMD5(@Buffer[0], SizeOf(TZDB2_BlockStore) * head.Count);
+  head.MD5 := umlMD5(@Buffer[0], SizeOf(TZDB2_BlockStore) * Length(Buffer));
   head.Flag2 := C_ZDB2_SpaceTableHead_2;
   if not umlFileSeek(Hnd_, Position_) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Write Seek error.');
       exit;
+    end;
+  if Assigned(Cipher_) then
+      Cipher_.Encrypt(@head, SizeOf(TBlockStoreHeader__));
   if not umlBlockWrite(Hnd_, head, SizeOf(TBlockStoreHeader__)) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Write head error.');
       exit;
+    end;
   // write space table
-  if not umlBlockWrite(Hnd_, Buffer[0], SizeOf(TZDB2_BlockStore) * head.Count) then
+  tmp := TMem64.Create;
+  tmp.Size := SizeOf(TZDB2_BlockStore) * Length(Buffer);
+  if tmp.Size > 0 then
+      CopyPtr(@Buffer[0], tmp.Memory, tmp.Size);
+  if Assigned(Cipher_) then
+      Cipher_.Encrypt(tmp.Memory, tmp.Size);
+  if not umlBlockWrite(Hnd_, tmp.Memory^, tmp.Size) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Write Buffer error.');
       exit;
+    end;
+  DisposeObject(tmp);
   // tail
   Tail.Flag1 := C_ZDB2_SpaceTableTail_1;
   Tail.NextPosition := NextPosition;
   Tail.Flag2 := C_ZDB2_SpaceTableTail_2;
+  if Assigned(Cipher_) then
+      Cipher_.Encrypt(@Tail, SizeOf(TBlockStoreTail__));
   if not umlBlockWrite(Hnd_, Tail, SizeOf(TBlockStoreTail__)) then
+    begin
+      TZDB2_Core_Space.ErrorInfo('TZDB2_BlockStoreData.Write tail error.');
       exit;
+    end;
   Result := True;
 end;
 
@@ -493,7 +551,7 @@ begin
   Result := FillFromBlockBuffer(Buffer, 0);
 end;
 
-function TZDB2_BlockStoreDataStruct.Read_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
+function TZDB2_BlockStoreDataStruct.Read(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
 var
   pos_: Int64;
   StoreData_: TZDB2_BlockStoreData;
@@ -501,10 +559,10 @@ begin
   Clean;
   Result := False;
   pos_ := Position_;
-  while (pos_ > 0) and (pos_ < umlFileSize(Hnd_)) do
+  while (pos_ > 0) and (pos_ < umlFileGetSize(Hnd_)) do
     begin
       StoreData_ := TZDB2_BlockStoreData.Create;
-      if StoreData_.Read_(pos_, Hnd_) then
+      if StoreData_.Read(Cipher_, pos_, Hnd_) then
         begin
           Add(StoreData_);
           pos_ := StoreData_.NextPosition;
@@ -519,7 +577,7 @@ begin
     end;
 end;
 
-function TZDB2_BlockStoreDataStruct.Write_(Position_: Int64; var Hnd_: TIOHnd): Boolean;
+function TZDB2_BlockStoreDataStruct.Write(Cipher_: IZDB2_Cipher; Position_: Int64; var Hnd_: TIOHnd): Boolean;
 var
   i: Integer;
   StoreData_: TZDB2_BlockStoreData;
@@ -528,7 +586,7 @@ begin
   for i := 0 to Count - 1 do
     begin
       StoreData_ := items[i];
-      Result := Result and StoreData_.Write_(StoreData_.Position, Hnd_);
+      Result := Result and StoreData_.Write(Cipher_, StoreData_.Position, Hnd_);
     end;
 end;
 
@@ -602,7 +660,7 @@ begin
   Stream_.Position := 0;
   SwapBuff_ := System.GetMemory(BlockSize);
   try
-    umlFileSeek(FCore.FSpace_IOHnd^, umlFileSize(FCore.FSpace_IOHnd^));
+    umlFileSeek(FCore.FSpace_IOHnd^, umlFileGetSize(FCore.FSpace_IOHnd^));
 
     while Total_ > 0 do
       begin
@@ -610,10 +668,10 @@ begin
           begin
             if Stream_.Read(SwapBuff_^, BlockSize) <> BlockSize then
               begin
-                FCore.ErrorInfo('TZDB2_SpacePlan.WriteStream Read error.');
+                TZDB2_Core_Space.ErrorInfo('TZDB2_SpacePlan.WriteStream Read error.');
                 exit;
               end;
-            BlockBuffer_[BlockID_].Position := umlFilePOS(FCore.FSpace_IOHnd^);
+            BlockBuffer_[BlockID_].Position := umlFileGetPOS(FCore.FSpace_IOHnd^);
             BlockBuffer_[BlockID_].Size := BlockSize;
             BlockBuffer_[BlockID_].UsedSpace := BlockSize;
             BlockBuffer_[BlockID_].Prev := -1;
@@ -622,7 +680,7 @@ begin
             FCore.DoEncrypt(SwapBuff_, BlockSize);
             if not umlBlockWrite(FCore.FSpace_IOHnd^, SwapBuff_^, BlockSize) then
               begin
-                FCore.ErrorInfo('TZDB2_SpacePlan.WriteStream umlBlockWrite error.');
+                TZDB2_Core_Space.ErrorInfo('TZDB2_SpacePlan.WriteStream umlBlockWrite error.');
                 exit;
               end;
             dec(Total_, BlockSize);
@@ -631,10 +689,10 @@ begin
           begin
             if Stream_.Read(SwapBuff_^, Total_) <> Total_ then
               begin
-                FCore.ErrorInfo('TZDB2_SpacePlan.WriteStream Read error.');
+                TZDB2_Core_Space.ErrorInfo('TZDB2_SpacePlan.WriteStream Read error.');
                 exit;
               end;
-            BlockBuffer_[BlockID_].Position := umlFilePOS(FCore.FSpace_IOHnd^);
+            BlockBuffer_[BlockID_].Position := umlFileGetPOS(FCore.FSpace_IOHnd^);
             BlockBuffer_[BlockID_].Size := Total_;
             BlockBuffer_[BlockID_].UsedSpace := Total_;
             BlockBuffer_[BlockID_].Prev := -1;
@@ -644,7 +702,7 @@ begin
             FCore.DoEncrypt(SwapBuff_, Total_);
             if not umlBlockWrite(FCore.FSpace_IOHnd^, SwapBuff_^, Total_) then
               begin
-                FCore.ErrorInfo('TZDB2_SpacePlan.WriteStream umlBlockWrite error.');
+                TZDB2_Core_Space.ErrorInfo('TZDB2_SpacePlan.WriteStream umlBlockWrite error.');
                 exit;
               end;
             Total_ := 0;
@@ -732,7 +790,7 @@ begin
   // merge store struct
   StoreData_ := TZDB2_BlockStoreData.Create;
   FStruct.ExtractToStoreBuffer(StoreData_.Buffer);
-  StoreData_.Position := umlFileSize(FCore.FSpace_IOHnd^);
+  StoreData_.Position := umlFileGetSize(FCore.FSpace_IOHnd^);
   StoreData_.NextPosition := 0;
   StoreData_.Count := Length(StoreData_.Buffer);
 
@@ -741,7 +799,7 @@ begin
       // AppendSpace
       FCore.FBlockStoreDataStruct.Last.NextPosition := StoreData_.Position;
       FCore.Save;
-      StoreData_.Write_(StoreData_.Position, FCore.FSpace_IOHnd^);
+      StoreData_.Write(FCore.FCipher, StoreData_.Position, FCore.FSpace_IOHnd^);
       FCore.Open;
     end
   else
@@ -749,7 +807,7 @@ begin
       // BuildSpace
       FCore.FHeader.StructEntry := StoreData_.Position;
       FCore.WriteHeader;
-      StoreData_.Write_(StoreData_.Position, FCore.FSpace_IOHnd^);
+      StoreData_.Write(FCore.FCipher, StoreData_.Position, FCore.FSpace_IOHnd^);
       FCore.Open;
     end;
   DisposeObject(StoreData_);
@@ -798,11 +856,56 @@ begin
                   Core_.ErrorInfo('CRC16Build: umlBlockRead error.');
                   exit;
                 end;
+              Core_.DoDecrypt(SwapBuff_, UsedSpace);
               CRC16Buffer[i] := umlCRC16(SwapBuff_, UsedSpace);
             end;
           if Assigned(Core_.FOnProgress) then
               Core_.FOnProgress(Core_.FBlockCount, i);
         end;
+    Result := True;
+  finally
+      System.FreeMemory(SwapBuff_);
+  end;
+end;
+
+function TZDB2_CRC16.Build(Core_: TZDB2_Core_Space; Hnd: TZDB2_BlockHndle): Boolean;
+var
+  i: Integer;
+  ID: Integer;
+  SwapBuff_: Pointer;
+begin
+  Result := False;
+  SetLength(CRC16Buffer, Length(Hnd));
+  SwapBuff_ := System.GetMemory($FFFF);
+  try
+    for i := 0 to Length(Hnd) - 1 do
+      begin
+        ID := Hnd[i];
+        with Core_.FBlockBuffer[ID] do
+          begin
+            if UsedSpace = 0 then
+                CRC16Buffer[i] := 0
+            else if Core_.ReadCacheBlock(SwapBuff_, ID) then
+                CRC16Buffer[i] := umlCRC16(SwapBuff_, UsedSpace)
+            else
+              begin
+                if not umlFileSeek(Core_.FSpace_IOHnd^, Core_.FBlockBuffer[ID].Position) then
+                  begin
+                    Core_.ErrorInfo('CRC16Build: umlFileSeek error.');
+                    exit;
+                  end;
+                if not umlBlockRead(Core_.FSpace_IOHnd^, SwapBuff_^, Core_.FBlockBuffer[ID].UsedSpace) then
+                  begin
+                    Core_.ErrorInfo('CRC16Build: umlBlockRead error.');
+                    exit;
+                  end;
+                Core_.DoDecrypt(SwapBuff_, UsedSpace);
+                CRC16Buffer[i] := umlCRC16(SwapBuff_, UsedSpace);
+              end;
+            if Assigned(Core_.FOnProgress) then
+                Core_.FOnProgress(Length(Hnd), i);
+          end;
+      end;
     Result := True;
   finally
       System.FreeMemory(SwapBuff_);
@@ -853,10 +956,10 @@ begin
   end;
 end;
 
-constructor TZDB2_Cipher.Create(CipherSecurity_: TCipherSecurity; passowrd_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
+constructor TZDB2_Cipher.Create(CipherSecurity_: TCipherSecurity; passoword_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
 begin
   inherited Create;
-  FCipher := CreateCipherClass(CipherSecurity_, passowrd_);
+  FCipher := CreateCipherClass(CipherSecurity_, passoword_);
   FCipher.Level := Level_;
   FCipher.ProcessTail := Tail_;
   FCipher.CBC := CBC_;
@@ -868,12 +971,12 @@ begin
   inherited Destroy;
 end;
 
-procedure TZDB2_Cipher.Encrypt(sour: Pointer; Size: WORD);
+procedure TZDB2_Cipher.Encrypt(sour: Pointer; Size: NativeInt);
 begin
   FCipher.Encrypt(sour, Size);
 end;
 
-procedure TZDB2_Cipher.Decrypt(sour: Pointer; Size: WORD);
+procedure TZDB2_Cipher.Decrypt(sour: Pointer; Size: NativeInt);
 begin
   FCipher.Decrypt(sour, Size);
 end;
@@ -1089,7 +1192,7 @@ begin
   inherited Destroy;
 end;
 
-procedure TZDB2_Core_Space.ErrorInfo(const Text_: SystemString);
+class procedure TZDB2_Core_Space.ErrorInfo(const Text_: SystemString);
 begin
   DoStatus('ZDB2 Core failed - ' + Text_);
 end;
@@ -1151,7 +1254,7 @@ begin
   if not WriteHeader then
       exit;
   FBlockStoreDataStruct.FillFromBlockBuffer(FBlockBuffer);
-  if not FBlockStoreDataStruct.Write_(FHeader.StructEntry, FSpace_IOHnd^) then
+  if not FBlockStoreDataStruct.Write(FCipher, FHeader.StructEntry, FSpace_IOHnd^) then
     begin
       ErrorInfo('WriteTable: write BlockStoreDataStruct error.');
       exit;
@@ -1183,7 +1286,7 @@ begin
   if (FHeader.Major = 2) and (FHeader.Minor = 0) then
     begin
       if FHeader.StructEntry >= C_ZDB2_HeaderSize then
-        if not FBlockStoreDataStruct.Read_(FHeader.StructEntry, FSpace_IOHnd^) then
+        if not FBlockStoreDataStruct.Read(FCipher, FHeader.StructEntry, FSpace_IOHnd^) then
           begin
             ErrorInfo('Open: read BlockStoreDataStruct error.');
             exit;
@@ -1260,7 +1363,7 @@ begin
   i := 0;
   while i < FBlockCount do
     begin
-      FBlockBuffer[i].Position := umlFilePOS(FSpace_IOHnd^);
+      FBlockBuffer[i].Position := umlFileGetPOS(FSpace_IOHnd^);
       FBlockBuffer[i].Size := BlockSize;
       FBlockBuffer[i].UsedSpace := 0;
       FBlockBuffer[i].Next := -1;
@@ -1339,7 +1442,7 @@ begin
   i := 0;
   while i < Length(tmp) do
     begin
-      tmp[i].Position := umlFilePOS(FSpace_IOHnd^);
+      tmp[i].Position := umlFileGetPOS(FSpace_IOHnd^);
       tmp[i].Size := BlockSize;
       tmp[i].UsedSpace := 0;
       tmp[i].Next := -1;
@@ -1397,7 +1500,7 @@ begin
   try
     for i := 0 to FBlockCount - 1 do
       begin
-        dest_BlockBuffer[i].Position := umlFilePOS(Dest_IOHnd);
+        dest_BlockBuffer[i].Position := umlFileGetPOS(Dest_IOHnd);
         dest_BlockBuffer[i].Size := FBlockBuffer[i].Size;
         dest_BlockBuffer[i].UsedSpace := FBlockBuffer[i].UsedSpace;
         dest_BlockBuffer[i].Prev := FBlockBuffer[i].Prev;
@@ -1435,7 +1538,7 @@ begin
     dest_StoreData.Position := headPos_;
     dest_StoreData.NextPosition := 0;
     dest_StoreData.Count := Length(dest_StoreData.Buffer);
-    dest_StoreData.Write_(headPos_, Dest_IOHnd);
+    dest_StoreData.Write(FCipher, headPos_, Dest_IOHnd);
     umlFileUpdate(Dest_IOHnd);
     Result := True;
   finally
@@ -2187,7 +2290,7 @@ var
   i: Integer;
   db1_crc16: TZDB2_CRC16;
 begin
-  Cipher_ := TZDB2_Cipher.Create(csTwoFish, 'hello world.', 1, False, True);
+  Cipher_ := TZDB2_Cipher.Create(TCipherSecurity.csSerpent, 'hello world.', 1, False, True);
 
   testList := TTestList_.Create;
 
@@ -2215,14 +2318,14 @@ begin
       TestArry[i].sMD5 := umlStreamMD5(TestArry[i].data);
 
       if db1_place.WriteStream(TestArry[i].data, 1024, TestArry[i].db1hnd) then
-          DoStatus('write TestArry[i] ok')
+          DoStatus('write TestArry[%d] ok', [i])
       else
-          DoStatus('write TestArry[i] failed');
+          DoStatus('write TestArry[%d] failed', [i]);
 
       if db2.WriteStream(TestArry[i].data, TestArry[i].db2hnd) then
-          DoStatus('write TestArry[i] ok')
+          DoStatus('write TestArry[%d] ok', [i])
       else
-          DoStatus('write TestArry[i] failed');
+          DoStatus('write TestArry[%d] failed', [i]);
       testList.Add(@TestArry[i]);
     end;
 
