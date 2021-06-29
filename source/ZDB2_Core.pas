@@ -63,6 +63,7 @@ type
     FlushThisCacheToFile: Boolean;
   end;
 
+  TZDB2_ID_List = {$IFDEF FPC}specialize {$ENDIF FPC} TGenericsList<Integer>;
   TZDB2_BlockPtrList_Decl = {$IFDEF FPC}specialize {$ENDIF FPC} TGenericsList<PZDB2_Block>;
 
   TZDB2_BlockPtrList = class(TZDB2_BlockPtrList_Decl)
@@ -71,8 +72,8 @@ type
   end;
 
   IZDB2_Cipher = interface
-    procedure Encrypt(p: Pointer; Size: NativeInt);
-    procedure Decrypt(p: Pointer; Size: NativeInt);
+    procedure Encrypt(buff: Pointer; Size: NativeInt);
+    procedure Decrypt(buff: Pointer; Size: NativeInt);
   end;
 
   TZDB2_BlockHndle = array of Integer;
@@ -153,10 +154,10 @@ type
   private
     FCipher: TCipher_Base;
   public
-    constructor Create(CipherSecurity_: TCipherSecurity; passoword_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
+    constructor Create(CipherSecurity_: TCipherSecurity; password_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
     destructor Destroy; override;
-    procedure Encrypt(sour: Pointer; Size: NativeInt);
-    procedure Decrypt(sour: Pointer; Size: NativeInt);
+    procedure Encrypt(buff: Pointer; Size: NativeInt);
+    procedure Decrypt(buff: Pointer; Size: NativeInt);
     class procedure Test;
   end;
 
@@ -193,6 +194,7 @@ type
     FBlockWriteCache: TZDB2_BlockWriteCache;
     FMode: TZDB2_SpaceMode;
     FCipher: IZDB2_Cipher;
+    FCipherMem: TMem64;
     FState: TZDB2_SpaceState;
     FOnProgress: TZDB2_OnProgress;
     FOnNoSpace: TZDB2_OnNoSpace;
@@ -204,8 +206,9 @@ type
     procedure PrepareCacheBlock();
     function GetUserCustomHeader: PZDB2_UserCustomHeader;
     procedure SetMode(const Value: TZDB2_SpaceMode);
-    procedure DoDecrypt(p: Pointer; Size: WORD);
-    procedure DoEncrypt(p: Pointer; Size: WORD);
+    procedure DoDecrypt(buff: Pointer; Size: NativeInt);
+    procedure DoEncrypt(buff: Pointer; Size: NativeInt);
+    function DoEncryptTemp(buff: Pointer; Size: NativeInt; BuffProtected_: Boolean): Pointer;
     function GetState: PZDB2_Core_SpaceState;
   public
     constructor Create(IOHnd_: PIOHnd);
@@ -229,7 +232,9 @@ type
     function CheckWriteSpace(Siz_: Int64; Space_: TZDB2_BlockPtrList): Boolean; overload;
     function WriteStream(Stream_: TCoreClassStream; var SpaceHnd: TZDB2_BlockHndle): Boolean; overload;
     function WriteStream(Stream_: TCoreClassStream; var ID: Integer): Boolean; overload;
+    function WriteData(buff: TZDB2_Mem; var SpaceHnd: TZDB2_BlockHndle; BuffProtected_: Boolean): Boolean; overload;
     function WriteData(buff: TZDB2_Mem; var SpaceHnd: TZDB2_BlockHndle): Boolean; overload;
+    function WriteData(buff: TZDB2_Mem; var ID: Integer; BuffProtected_: Boolean): Boolean; overload;
     function WriteData(buff: TZDB2_Mem; var ID: Integer): Boolean; overload;
     function ReadStream(Stream_: TCoreClassStream; SpaceHnd: TZDB2_BlockHndle): Boolean; overload;
     function ReadStream(Stream_: TCoreClassStream; ID: Integer): Boolean; overload;
@@ -243,6 +248,7 @@ type
     function GetDataSize(ID: Integer): Int64; overload;
     function GetDataPhysics(SpaceHnd: TZDB2_BlockHndle): Int64; overload;
     function GetDataPhysics(ID: Integer): Int64; overload;
+    function BuildTableID: TZDB2_BlockHndle;
 
     property AutoCloseIOHnd: Boolean read FAutoCloseIOHnd write FAutoCloseIOHnd;
     property AutoFreeIOHnd: Boolean read FAutoFreeIOHnd write FAutoFreeIOHnd;
@@ -956,10 +962,10 @@ begin
   end;
 end;
 
-constructor TZDB2_Cipher.Create(CipherSecurity_: TCipherSecurity; passoword_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
+constructor TZDB2_Cipher.Create(CipherSecurity_: TCipherSecurity; password_: U_String; Level_: Integer; Tail_, CBC_: Boolean);
 begin
   inherited Create;
-  FCipher := CreateCipherClass(CipherSecurity_, passoword_);
+  FCipher := CreateCipherClassFromPassword(CipherSecurity_, password_);
   FCipher.Level := Level_;
   FCipher.ProcessTail := Tail_;
   FCipher.CBC := CBC_;
@@ -971,14 +977,14 @@ begin
   inherited Destroy;
 end;
 
-procedure TZDB2_Cipher.Encrypt(sour: Pointer; Size: NativeInt);
+procedure TZDB2_Cipher.Encrypt(buff: Pointer; Size: NativeInt);
 begin
-  FCipher.Encrypt(sour, Size);
+  FCipher.Encrypt(buff, Size);
 end;
 
-procedure TZDB2_Cipher.Decrypt(sour: Pointer; Size: NativeInt);
+procedure TZDB2_Cipher.Decrypt(buff: Pointer; Size: NativeInt);
 begin
-  FCipher.Decrypt(sour, Size);
+  FCipher.Decrypt(buff, Size);
 end;
 
 class procedure TZDB2_Cipher.Test;
@@ -1130,16 +1136,34 @@ begin
   end;
 end;
 
-procedure TZDB2_Core_Space.DoDecrypt(p: Pointer; Size: WORD);
+procedure TZDB2_Core_Space.DoDecrypt(buff: Pointer; Size: NativeInt);
 begin
   if (Size > 0) and Assigned(FCipher) then
-      FCipher.Decrypt(p, Size);
+      FCipher.Decrypt(buff, Size);
 end;
 
-procedure TZDB2_Core_Space.DoEncrypt(p: Pointer; Size: WORD);
+procedure TZDB2_Core_Space.DoEncrypt(buff: Pointer; Size: NativeInt);
 begin
   if (Size > 0) and Assigned(FCipher) then
-      FCipher.Encrypt(p, Size);
+      FCipher.Encrypt(buff, Size);
+end;
+
+function TZDB2_Core_Space.DoEncryptTemp(buff: Pointer; Size: NativeInt; BuffProtected_: Boolean): Pointer;
+begin
+  if (Size > 0) and Assigned(FCipher) then
+    begin
+      if BuffProtected_ then
+        begin
+          FCipherMem.Position := 0;
+          FCipherMem.WritePtr(buff, Size);
+          Result := FCipherMem.Memory;
+        end
+      else
+          Result := buff;
+      FCipher.Encrypt(Result, Size);
+    end
+  else
+      Result := buff;
 end;
 
 function TZDB2_Core_Space.GetState: PZDB2_Core_SpaceState;
@@ -1164,6 +1188,7 @@ begin
   SetLength(FBlockWriteCache, 0);
   FMode := smNormal;
   FCipher := nil;
+  FCipherMem := TMem64.Create;
 
   FState.Physics := 0;
   FState.FreeSpace := 0;
@@ -1184,6 +1209,7 @@ begin
   DisposeObject(FBlockStoreDataStruct);
   ClearCache;
   SetLength(FBlockWriteCache, 0);
+  DisposeObject(FCipherMem);
 
   if FAutoCloseIOHnd then
       umlFileClose(FSpace_IOHnd^);
@@ -1837,7 +1863,7 @@ begin
   SetLength(SpaceHnd, 0);
 end;
 
-function TZDB2_Core_Space.WriteData(buff: TZDB2_Mem; var SpaceHnd: TZDB2_BlockHndle): Boolean;
+function TZDB2_Core_Space.WriteData(buff: TZDB2_Mem; var SpaceHnd: TZDB2_BlockHndle; BuffProtected_: Boolean): Boolean;
 var
   Space_: TZDB2_BlockPtrList;
   tmp: Int64;
@@ -1887,8 +1913,7 @@ begin
                     ErrorInfo('WriteData: umlFileSeek Block error.');
                     exit;
                   end;
-                DoEncrypt(p, Size);
-                if not umlBlockWrite(FSpace_IOHnd^, p^, Size) then
+                if not umlBlockWrite(FSpace_IOHnd^, DoEncryptTemp(p, Size, BuffProtected_)^, Size) then
                   begin
                     ErrorInfo('WriteData: umlBlockWrite Block error.');
                     exit;
@@ -1912,8 +1937,7 @@ begin
                     ErrorInfo('WriteData: umlFileSeek tail Block error.');
                     exit;
                   end;
-                DoEncrypt(p, tmp);
-                if not umlBlockWrite(FSpace_IOHnd^, p^, tmp) then
+                if not umlBlockWrite(FSpace_IOHnd^, DoEncryptTemp(p, tmp, BuffProtected_)^, tmp) then
                   begin
                     ErrorInfo('WriteData: umlBlockWrite tail Block error.');
                     exit;
@@ -1964,6 +1988,21 @@ begin
         else
             inc(i);
       end;
+end;
+
+function TZDB2_Core_Space.WriteData(buff: TZDB2_Mem; var SpaceHnd: TZDB2_BlockHndle): Boolean;
+begin
+  Result := WriteData(buff, SpaceHnd, True);
+end;
+
+function TZDB2_Core_Space.WriteData(buff: TZDB2_Mem; var ID: Integer; BuffProtected_: Boolean): Boolean;
+var
+  SpaceHnd: TZDB2_BlockHndle;
+begin
+  Result := WriteData(buff, SpaceHnd, BuffProtected_);
+  if Result then
+      ID := SpaceHnd[0];
+  SetLength(SpaceHnd, 0);
 end;
 
 function TZDB2_Core_Space.WriteData(buff: TZDB2_Mem; var ID: Integer): Boolean;
@@ -2265,6 +2304,34 @@ begin
   Result := GetDataPhysics(GetSpaceHnd(ID));
 end;
 
+function TZDB2_Core_Space.BuildTableID: TZDB2_BlockHndle;
+var
+  i, j: Integer;
+  LBuff: array of Boolean;
+  tmp: TZDB2_BlockHndle;
+  L: TZDB2_ID_List;
+begin
+  SetLength(LBuff, FBlockCount);
+  L := TZDB2_ID_List.Create;
+  try
+    for i := 0 to FBlockCount - 1 do
+      if (not LBuff[i]) and (FBlockBuffer[i].UsedSpace > 0) then
+        begin
+          tmp := GetSpaceHnd(FBlockBuffer[i].ID);
+          for j := 0 to Length(tmp) - 1 do
+              LBuff[tmp[j]] := True;
+          L.Add(tmp[0]);
+        end;
+    SetLength(Result, L.Count);
+    for i := 0 to L.Count - 1 do
+        Result[i] := L[i];
+  except
+      SetLength(Result, 0);
+  end;
+  DisposeObject(L);
+  SetLength(LBuff, 0);
+end;
+
 class procedure TZDB2_Core_Space.Test;
 type
   TTest_ = record
@@ -2289,8 +2356,9 @@ var
   db1_1, db2_2: TZDB2_Core_Space;
   i: Integer;
   db1_crc16: TZDB2_CRC16;
+  db1Hnd_, db2Hnd_: TZDB2_BlockHndle;
 begin
-  Cipher_ := TZDB2_Cipher.Create(TCipherSecurity.csSerpent, 'hello world.', 1, False, True);
+  Cipher_ := TZDB2_Cipher.Create(TCipherSecurity.csRijndael, 'hello world.', 1, False, True);
 
   testList := TTestList_.Create;
 
@@ -2312,8 +2380,9 @@ begin
 
   for i := 0 to Length(TestArry) - 1 do
     begin
+      SetMT19937Seed(i);
       TestArry[i].data := TMemoryStream64.Create;
-      TestArry[i].data.Size := 1024 * 16 + umlRandomRange(0, 1024 * 1024);
+      TestArry[i].data.Size := 1024 * 16 + 1024 * 1024;
       MT19937Rand32(MaxInt, TestArry[i].data.Memory, TestArry[i].data.Size div 4);
       TestArry[i].sMD5 := umlStreamMD5(TestArry[i].data);
 
@@ -2331,6 +2400,35 @@ begin
 
   db1_place.Flush;
   DisposeObject(db1_place);
+  db1.Save;
+
+  db1Hnd_ := db1.BuildTableID;
+  if Length(db1Hnd_) = Length(TestArry) then
+    begin
+      for i := 0 to Length(TestArry) - 1 do
+        begin
+          if TestArry[i].db1hnd[0] = db1Hnd_[i] then
+              DoStatus('BuildTableID verify successed!!', [])
+          else
+              DoStatus('BuildTableID verify error!!', []);
+        end
+    end
+  else
+      DoStatus('BuildTableID error!!', []);
+
+  db2Hnd_ := db2.BuildTableID;
+  if Length(db2Hnd_) = Length(TestArry) then
+    begin
+      for i := 0 to Length(TestArry) - 1 do
+        begin
+          if TestArry[i].db2hnd[0] = db2Hnd_[i] then
+              DoStatus('BuildTableID verify successed!!', [])
+          else
+              DoStatus('BuildTableID verify error!!', []);
+        end
+    end
+  else
+      DoStatus('BuildTableID error!!', []);
 
   db1_crc16 := TZDB2_CRC16.Create;
   db1_crc16.Build(db1);
