@@ -40,8 +40,8 @@ type
 
   TExpressionDeclType = (
     edtSymbol,                                                                                 // symbol
-    edtBool, edtInt, edtInt64, edtUInt64, edtWord, edtByte, edtSmallInt, edtShortInt, edtUInt, // inbuild byte type
-    edtSingle, edtDouble, edtCurrency,                                                         // inbuild float type
+    edtBool, edtInt, edtInt64, edtUInt64, edtWord, edtByte, edtSmallInt, edtShortInt, edtUInt, // build-in byte type
+    edtSingle, edtDouble, edtCurrency,                                                         // build-in float type
     edtString,                                                                                 // string
     edtProcExp,                                                                                // proc
     edtExpressionAsValue,                                                                      // expression
@@ -236,6 +236,7 @@ function EvaluateExpressionValue_P(UsedCache: Boolean; SpecialAsciiToken: TListP
   TextEngClass: TTextParsingClass; TextStyle: TTextStyle; ExpressionText: SystemString; const OnGetValue: TOnDeclValueProc): Variant;
 {$ENDREGION 'internal define'}
 
+function OpCache: THashObjectList;
 procedure CleanOpCache();
 
 { prototype: EvaluateExpressionValue }
@@ -289,6 +290,7 @@ function EvaluateExpressionMatrix(W, H: Integer; ExpressionText: SystemString): 
 
 // easy API
 function EStr(s: U_String): U_String;
+function EStrToBool(s: U_String; default: Boolean): Boolean;
 function EStrToInt(s: U_String; default: Integer): Integer;
 function EStrToInt64(s: U_String; default: Int64): Int64;
 function EStrToFloat(s: U_String; default: Double): Double;
@@ -306,7 +308,7 @@ procedure EvaluateExpressionVectorAndMatrix_test_;
 implementation
 
 var
-  OpCache: THashObjectList;
+  OpCache___: THashObjectList = nil;
 
 {$REGION 'internal imp'}
 
@@ -1571,6 +1573,8 @@ begin
 
   if ParsingEng.ParsingData.Len < 1 then
       Exit;
+  if ParsingEng.TokenCountT([ttTextDecl, ttNumber, ttAscii]) = 0 then
+      Exit;
 
   cPos := 1;
   BlockIndent := 0;
@@ -2723,6 +2727,7 @@ var
   Op: TOpCode;
   i: Integer;
 begin
+  Op := nil;
   if UsedCache then
     begin
       LockObject(OpCache);
@@ -2774,6 +2779,7 @@ var
   Op: TOpCode;
   i: Integer;
 begin
+  Op := nil;
   if UsedCache then
     begin
       LockObject(OpCache);
@@ -2825,6 +2831,7 @@ var
   Op: TOpCode;
   i: Integer;
 begin
+  Op := nil;
   if UsedCache then
     begin
       LockObject(OpCache);
@@ -2871,6 +2878,13 @@ end;
 
 {$ENDREGION 'internal imp'}
 
+
+function OpCache: THashObjectList;
+begin
+  if OpCache___ = nil then
+      OpCache___ := THashObjectList.CustomCreate(True, 1024 * 1024);
+  Result := OpCache___;
+end;
 
 procedure CleanOpCache();
 begin
@@ -2931,6 +2945,7 @@ begin
       Exit;
     end;
 
+  Op := nil;
   if (UsedCache) and (const_vl = nil) then
     begin
       LockObject(OpCache);
@@ -3183,29 +3198,50 @@ end;
 
 function EStr(s: U_String): U_String;
 begin
-  Result := umlVarToStr(EvaluateExpressionValue(s), False);
+  try
+      Result := umlVarToStr(EvaluateExpressionValue(s), False);
+  except
+      Result := '';
+  end;
+end;
+
+function EStrToBool(s: U_String; default: Boolean): Boolean;
+begin
+  try
+      Result := EvaluateExpressionValue(s);
+  except
+      Result := Default;
+  end;
 end;
 
 function EStrToInt(s: U_String; default: Integer): Integer;
 var
   v: Variant;
 begin
-  v := EvaluateExpressionValue(s);
-  if VarIsNumeric(v) then
-      Result := v
-  else
+  try
+    v := EvaluateExpressionValue(s);
+    if VarIsNumeric(v) then
+        Result := v
+    else
+        Result := default;
+  except
       Result := default;
+  end;
 end;
 
 function EStrToInt64(s: U_String; default: Int64): Int64;
 var
   v: Variant;
 begin
-  v := EvaluateExpressionValue(s);
-  if VarIsNumeric(v) then
-      Result := v
-  else
+  try
+    v := EvaluateExpressionValue(s);
+    if VarIsNumeric(v) then
+        Result := v
+    else
+        Result := default;
+  except
       Result := default;
+  end;
 end;
 
 function EStrToFloat(s: U_String; default: Double): Double;
@@ -3217,22 +3253,30 @@ function EStrToSingle(s: U_String; default: Single): Single;
 var
   v: Variant;
 begin
-  v := EvaluateExpressionValue(s);
-  if VarIsNumeric(v) then
-      Result := v
-  else
+  try
+    v := EvaluateExpressionValue(s);
+    if VarIsNumeric(v) then
+        Result := v
+    else
+        Result := default;
+  except
       Result := default;
+  end;
 end;
 
 function EStrToDouble(s: U_String; default: Double): Double;
 var
   v: Variant;
 begin
-  v := EvaluateExpressionValue(s);
-  if VarIsNumeric(v) then
-      Result := v
-  else
+  try
+    v := EvaluateExpressionValue(s);
+    if VarIsNumeric(v) then
+        Result := v
+    else
+        Result := default;
+  except
       Result := default;
+  end;
 end;
 
 function ExpressionValueVectorToStr(v: TExpressionValueVector): TPascalString;
@@ -3288,10 +3332,10 @@ end;
 
 initialization
 
-OpCache := THashObjectList.CustomCreate(True, $FFFF);
+OpCache___ := nil;
 
 finalization
 
-DisposeObject(OpCache);
+DisposeObject(OpCache___);
 
 end.

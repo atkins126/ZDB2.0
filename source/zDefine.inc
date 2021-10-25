@@ -109,16 +109,6 @@
     {$DEFINE FirstCharInZero}
   {$ENDIF IOS}
 
-  // delphi 10.4
-  {$IFDEF VER340}
-    {$UNDEF FirstCharInZero}
-  {$ENDIF VER340}
-
-  // delphi 10.5
-  {$IFDEF VER350}
-    {$UNDEF FirstCharInZero}
-  {$ENDIF VER350}
-
   // nativeint as int or int64 type variable when Modifier is overload
   {$DEFINE OVERLOAD_NATIVEINT}
 
@@ -143,17 +133,28 @@
   // Using this paper replace of Delphi Random() and Randomize() function, work on xe 10.3 or laster
   {$UNDEF InstallMT19937CoreToDelphi}
 
+  // delphi 10.3
   {$IFDEF VER330}
     {$DEFINE InstallMT19937CoreToDelphi}
   {$ENDIF VER330}
 
+  // delphi 10.4
   {$IFDEF VER340}
     {$DEFINE InstallMT19937CoreToDelphi}
+    {$UNDEF FirstCharInZero}
   {$ENDIF VER340}
 
+  // delphi 11.0
   {$IFDEF VER350}
     {$DEFINE InstallMT19937CoreToDelphi}
+    {$UNDEF FirstCharInZero}
   {$ENDIF VER350}
+
+  // delphi 11.x
+  {$IFDEF VER360}
+    {$DEFINE InstallMT19937CoreToDelphi}
+    {$UNDEF FirstCharInZero}
+  {$ENDIF VER360}
 
   // MT19937 of seed in the startup TCompute is 0
   {$DEFINE MT19937SeedOnTComputeThreadIs0}
@@ -167,7 +168,7 @@
 
   {$IF Defined(Android) or Defined(IOS)}
     {$DEFINE SMALL_RASTER_FONT_Build_In}
-  {$IFEND}
+  {$ENDIF}
 
   // ZDB_BACKUP is automatically made and replica caching is enabled.
   // usage ZDB_BACKUP so slows the open of large size ZDB file, after time, but does is high performance.
@@ -203,7 +204,11 @@
     {$D+} { debug information }
   {$ENDIF}
 
-  {$IF Defined(Android) or Defined(IOS)}
+  {$IF Defined(Android)}
+    {$DEFINE SMALL_RASTER_FONT_Build_In}
+    {$DEFINE PhysicsIO_On_CrossSocket}
+    // {$DEFINE PhysicsIO_On_Indy}
+  {$ELSEIF Defined(IOS)}
     {$DEFINE SMALL_RASTER_FONT_Build_In}
     {$DEFINE PhysicsIO_On_Indy}
   {$ELSE}
@@ -218,9 +223,6 @@
   {$X+} { Extended syntax }
   {$Z1} { Minimum enum size }
 {$ENDIF FPC}
-
-// ZDB2.0 optimized TMemoryStream/TMemoryStream64 for Replace
-{$DEFINE ZDB2_Core_Used_Mem64}
 
 // Using fillchar replace of FillPtr
 // Maybe fillchar works on MMX / SSE2,
@@ -238,6 +240,9 @@
 // building a network CS system, the symmetry of compiler(FPC/Delphi) "UsedSequencePacketOnP2PVM"
 // Sequence packets default are closed in P2PVM-IO
 {$UNDEF UsedSequencePacketOnP2PVM}
+
+// CommunicationFramework used QuietMode
+{$UNDEF Communication_QuietMode}
 
 {$IFDEF DEBUG}
   // initialization status prompt
